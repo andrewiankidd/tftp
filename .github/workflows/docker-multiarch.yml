@@ -1,0 +1,157 @@
+name: Docker Multi-Arch Build
+
+on:
+  pull_request:
+    branches:
+      - '**'
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  meta:
+    name: Compute build metadata
+    runs-on: ubuntu-latest
+    outputs:
+      do_push: ${{ steps.set.outputs.do_push }}
+      is_tag: ${{ steps.set.outputs.is_tag }}
+      version: ${{ steps.set.outputs.version }}
+    steps:
+      - name: Determine push and tag info
+        id: set
+        shell: bash
+        run: |
+          echo "event=${GITHUB_EVENT_NAME}"
+          do_push=false
+          is_tag=false
+          version=
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == refs/tags/* ]]; then
+            is_tag=true
+            do_push=true
+            version="${GITHUB_REF_NAME}"
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            do_push=true
+          fi
+          if [[ -z "${{ secrets.DOCKERHUB_TOKEN }}" ]]; then do_push=false; fi
+          echo "do_push=${do_push}" >> "$GITHUB_OUTPUT"
+          echo "is_tag=${is_tag}" >> "$GITHUB_OUTPUT"
+          if [[ -n "${version}" ]]; then
+            echo "version=${version}" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build (${{ matrix.platform }})
+    needs: meta
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch_suffix: amd64
+          - platform: linux/arm64
+            arch_suffix: arm64
+    env:
+      DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_USERNAME }}/tftp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        if: needs.meta.outputs.do_push == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build image (no push) ${{ matrix.platform }}
+        if: needs.meta.outputs.do_push != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: false
+          provenance: false
+          sbom: false
+
+      - name: Build and push image by digest ${{ matrix.platform }}
+        if: needs.meta.outputs.do_push == 'true'
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          sbom: false
+          outputs: type=image,name=${{ env.DOCKERHUB_REPO }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: write digest file
+        if: needs.meta.outputs.do_push == 'true'
+        shell: bash
+        run: echo "${{ steps.build.outputs.digest }}" > "digest-${{ matrix.arch_suffix }}"
+
+      - name: upload digest artifact
+        if: needs.meta.outputs.do_push == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch_suffix }}
+          path: digest-${{ matrix.arch_suffix }}
+
+  manifest:
+    name: Publish multi-arch manifests
+    needs: [meta, build]
+    if: needs.meta.outputs.do_push == 'true'
+    runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_USERNAME }}/tftp
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digests-*
+          path: ./digests
+          merge-multiple: true
+
+      - name: Create and push 'latest' multi-arch manifest
+        shell: bash
+        run: |
+          repo="${{ env.DOCKERHUB_REPO }}"
+          amd64=$(cat ./digests/digest-amd64)
+          arm64=$(cat ./digests/digest-arm64)
+          docker buildx imagetools create \
+            -t "${repo}:latest" \
+            "${repo}@${amd64}" \
+            "${repo}@${arm64}"
+
+      - name: Create and push versioned multi-arch manifest
+        if: needs.meta.outputs.is_tag == 'true'
+        shell: bash
+        run: |
+          repo="${{ env.DOCKERHUB_REPO }}"
+          version="${{ needs.meta.outputs.version }}"
+          amd64=$(cat ./digests/digest-amd64)
+          arm64=$(cat ./digests/digest-arm64)
+          docker buildx imagetools create \
+            -t "${repo}:${version}" \
+            "${repo}@${amd64}" \
+            "${repo}@${arm64}"
