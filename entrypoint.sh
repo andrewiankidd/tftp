@@ -6,6 +6,15 @@ escape_arg() {
   printf "%s" "$1" | sed "s/'/'\\\\''/g"
 }
 
+# Standardized logging helpers.
+log() {
+  printf '[entrypoint] %s\n' "$*"
+}
+
+log_error() {
+  printf '[entrypoint][error] %s\n' "$*" >&2
+}
+
 # Trim leading/trailing whitespace from list entries.
 trim_spaces() {
   printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
@@ -139,7 +148,7 @@ ensure_privileged_port_access() {
   if has_cap_net_bind_service; then
     return
   fi
-  echo "Cannot bind to privileged port without NET_BIND_SERVICE capability or root privileges." >&2
+  log_error "Cannot bind to privileged port ${port} without NET_BIND_SERVICE capability or root privileges."
   exit 1
 }
 
@@ -159,6 +168,7 @@ EOF
     start="$end"
     end="$temp"
   fi
+  log "Validating port range ${start}:${end}"
   port="$start"
   while [ "$port" -le "$end" ]; do
     ensure_privileged_port_access "$port"
@@ -178,7 +188,7 @@ detect_pod_ip() {
 TFTPD_ARGS=""
 
 # Network and process behavior flags.
-echo "[entrypoint] Configuring network flags"
+log "Configuring network flags"
 append_flag_if_enabled "${TFTPD_USE_IPV4:-}" "--ipv4"
 append_flag_if_enabled "${TFTPD_USE_IPV6:-}" "--ipv6"
 append_flag_if_enabled "${TFTPD_LISTEN:-}" "--listen"
@@ -187,19 +197,26 @@ TFTPD_ADDRESS_VALUE="${TFTPD_ADDRESS:-}"
 POD_IP=""
 if POD_INFO=$(detect_pod_ip); then
   POD_IP="$POD_INFO"
+  if [ -n "$POD_IP" ]; then
+    log "Detected pod IP ${POD_IP}"
+  else
+    log "Pod IP detection returned empty result"
+  fi
+else
+  log "Pod IP detection failed"
 fi
 if [ -n "$TFTPD_ADDRESS_VALUE" ] && [ -n "$POD_IP" ] && ! is_enabled "${HOSTNETWORK:-}"; then
   address_host="$(extract_host_from_address "$TFTPD_ADDRESS_VALUE")"
   address_port="$(extract_port_from_address "$TFTPD_ADDRESS_VALUE" "69")"
   if [ -n "$address_host" ] && [ "$address_host" != "$POD_IP" ]; then
-    echo "TFTPD_ADDRESS does not match pod IP and hostNetwork=false. Normalizing to POD_IP to ensure correct binding in Kubernetes." >&2
+    log "TFTPD_ADDRESS host '${address_host}' does not match pod IP '${POD_IP}' and hostNetwork=false. Normalizing to ${POD_IP}:${address_port}."
     TFTPD_ADDRESS_VALUE="${POD_IP}:${address_port}"
   fi
 fi
 append_arg_with_value "--address" "${TFTPD_ADDRESS_VALUE}"
 
 # File handling and security controls.
-echo "[entrypoint] Configuring file/security options"
+log "Configuring file/security options"
 append_flag_if_enabled "${TFTPD_ENABLE_CREATE:-}" "--create"
 TFTPD_SECURE_MODE_VALUE="${TFTPD_SECURE_MODE:-true}"
 TFTPD_SECURE_ENABLED="false"
@@ -213,12 +230,12 @@ append_flag_if_enabled "${TFTPD_PERMISSIVE:-}" "--permissive"
 append_arg_with_value "--pidfile" "${TFTPD_PIDFILE:-}"
 
 # Timing and retransmission behavior.
-echo "[entrypoint] Configuring timing parameters"
+log "Configuring timing parameters"
 append_arg_with_value "--timeout" "${TFTPD_TIMEOUT:-}"
 append_arg_with_value "--retransmit" "${TFTPD_RETRANSMIT_TIMEOUT:-}"
 
 # Mapping and logging controls.
-echo "[entrypoint] Configuring mapping and verbosity"
+log "Configuring mapping and verbosity"
 append_arg_with_value "--mapfile" "${TFTPD_MAPFILE:-}"
 
 if [ -n "${TFTPD_VERBOSE_COUNT:-}" ]; then
@@ -238,7 +255,7 @@ append_arg_with_value "--verbosity" "${TFTPD_VERBOSITY:-}"
 append_list_items "--refuse" "${TFTPD_REFUSE_OPTIONS:-}"
 
 # Transfer tuning.
-echo "[entrypoint] Configuring transfer settings"
+log "Configuring transfer settings"
 append_arg_with_value "--blocksize" "${TFTPD_BLOCKSIZE:-}"
 TFTPD_PORT_RANGE_VALUE="${TFTPD_PORT_RANGE:-}"
 append_arg_with_value "--port-range" "${TFTPD_PORT_RANGE_VALUE}"
@@ -248,6 +265,7 @@ append_flag_if_enabled "${TFTPD_SHOW_VERSION:-}" "--version"
 TFTPD_ROOT="${TFTPD_ROOT:-/var/tftpboot}"
 TFTPD_DIRECTORIES="${TFTPD_DIRECTORIES:-$TFTPD_ROOT}"
 if [ "$TFTPD_SECURE_ENABLED" = "true" ]; then
+  log "Secure mode enabled; validating single directory constraint"
   dir_count=0
   while IFS= read -r entry; do
     entry="$(trim_spaces "$entry")"
@@ -257,11 +275,11 @@ if [ "$TFTPD_SECURE_ENABLED" = "true" ]; then
 $(printf '%s\n' "$TFTPD_DIRECTORIES" | tr ',' '\n')
 EOF
   if [ "$dir_count" -gt 1 ]; then
-    echo "Secure mode only supports a single directory. Reduce TFTPD_DIRECTORIES to one path or disable TFTPD_SECURE_MODE." >&2
+    log_error "Secure mode only supports a single directory but ${dir_count} were provided (${TFTPD_DIRECTORIES}). Reduce TFTPD_DIRECTORIES to one path or disable TFTPD_SECURE_MODE."
     exit 1
   fi
 fi
-echo "[entrypoint] Finalizing directory access rules"
+log "Finalizing directory access rules"
 append_list_items "" "$TFTPD_DIRECTORIES"
 
 if [ -n "$TFTPD_PORT_RANGE_VALUE" ]; then
@@ -272,14 +290,15 @@ TFTPD_BIND_PORT="69"
 if [ -n "$TFTPD_ADDRESS_VALUE" ]; then
   TFTPD_BIND_PORT="$(extract_port_from_address "$TFTPD_ADDRESS_VALUE" "69")"
 fi
+log "Ensuring access to bind port ${TFTPD_BIND_PORT}"
 ensure_privileged_port_access "$TFTPD_BIND_PORT"
 
 # Forward tftpd logs through BusyBox syslogd to stdout once env is applied.
 if ! pidof syslogd >/dev/null 2>&1; then
-  echo "[entrypoint] Starting syslogd"
+  log "Starting syslogd"
   syslogd -n -O /dev/stdout &
 else
-  echo "[entrypoint] syslogd already running, skipping start"
+  log "syslogd already running, skipping start"
 fi
 
 # Positionally add any user-provided overrides.
@@ -287,5 +306,5 @@ if [ -n "$TFTPD_ARGS" ]; then
   eval "set -- $TFTPD_ARGS \"\$@\""
 fi
 
-echo "[entrypoint] Launching: in.tftpd $*"
+log "Launching: in.tftpd $*"
 exec in.tftpd "$@"
