@@ -282,11 +282,6 @@ fi
 
 append_arg_with_value "--verbosity" "${TFTPD_VERBOSITY:-}"
 
-# Enable full tftpd-hpa debug mode
-if is_enabled "${TFTPD_DEBUG:-}"; then
-  append_arg "--debug"
-fi
-
 append_list_items "--refuse" "${TFTPD_REFUSE_OPTIONS:-}"
 log "Completed mapping and verbosity configuration"
 
