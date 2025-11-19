@@ -15,6 +15,21 @@ log_error() {
   printf '[entrypoint][error] %s\n' "$*" >&2
 }
 
+entrypoint_error() {
+  status="$1"
+  line="$2"
+  context="$3"
+  if [ -n "$context" ]; then
+    log_error "Failure during ${context} (exit ${status}) at line ${line}"
+  else
+    log_error "Failure (exit ${status}) at line ${line}"
+  fi
+  exit "$status"
+}
+
+CURRENT_STAGE="initialization"
+trap 'entrypoint_error $? $LINENO "$CURRENT_STAGE"' ERR
+
 # Trim leading/trailing whitespace from list entries.
 trim_spaces() {
   printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
@@ -188,6 +203,7 @@ detect_pod_ip() {
 TFTPD_ARGS=""
 
 # Network and process behavior flags.
+CURRENT_STAGE="network configuration"
 log "Configuring network flags"
 append_flag_if_enabled "${TFTPD_USE_IPV4:-}" "--ipv4"
 append_flag_if_enabled "${TFTPD_USE_IPV6:-}" "--ipv6"
@@ -216,6 +232,7 @@ fi
 append_arg_with_value "--address" "${TFTPD_ADDRESS_VALUE}"
 
 # File handling and security controls.
+CURRENT_STAGE="file/security configuration"
 log "Configuring file/security options"
 append_flag_if_enabled "${TFTPD_ENABLE_CREATE:-}" "--create"
 TFTPD_SECURE_MODE_VALUE="${TFTPD_SECURE_MODE:-true}"
@@ -230,11 +247,13 @@ append_flag_if_enabled "${TFTPD_PERMISSIVE:-}" "--permissive"
 append_arg_with_value "--pidfile" "${TFTPD_PIDFILE:-}"
 
 # Timing and retransmission behavior.
+CURRENT_STAGE="timing configuration"
 log "Configuring timing parameters"
 append_arg_with_value "--timeout" "${TFTPD_TIMEOUT:-}"
 append_arg_with_value "--retransmit" "${TFTPD_RETRANSMIT_TIMEOUT:-}"
 
 # Mapping and logging controls.
+CURRENT_STAGE="mapping/verbosity configuration"
 log "Configuring mapping and verbosity"
 append_arg_with_value "--mapfile" "${TFTPD_MAPFILE:-}"
 
@@ -253,8 +272,10 @@ fi
 
 append_arg_with_value "--verbosity" "${TFTPD_VERBOSITY:-}"
 append_list_items "--refuse" "${TFTPD_REFUSE_OPTIONS:-}"
+log "Completed mapping and verbosity configuration"
 
 # Transfer tuning.
+CURRENT_STAGE="transfer configuration"
 log "Configuring transfer settings"
 append_arg_with_value "--blocksize" "${TFTPD_BLOCKSIZE:-}"
 TFTPD_PORT_RANGE_VALUE="${TFTPD_PORT_RANGE:-}"
@@ -262,6 +283,7 @@ append_arg_with_value "--port-range" "${TFTPD_PORT_RANGE_VALUE}"
 append_flag_if_enabled "${TFTPD_SHOW_VERSION:-}" "--version"
 
 # Directory arguments (defaults to original secure root).
+CURRENT_STAGE="directory validation"
 TFTPD_ROOT="${TFTPD_ROOT:-/var/tftpboot}"
 TFTPD_DIRECTORIES="${TFTPD_DIRECTORIES:-$TFTPD_ROOT}"
 if [ "$TFTPD_SECURE_ENABLED" = "true" ]; then
@@ -290,10 +312,12 @@ TFTPD_BIND_PORT="69"
 if [ -n "$TFTPD_ADDRESS_VALUE" ]; then
   TFTPD_BIND_PORT="$(extract_port_from_address "$TFTPD_ADDRESS_VALUE" "69")"
 fi
+CURRENT_STAGE="privileged port check"
 log "Ensuring access to bind port ${TFTPD_BIND_PORT}"
 ensure_privileged_port_access "$TFTPD_BIND_PORT"
 
 # Forward tftpd logs through BusyBox syslogd to stdout once env is applied.
+CURRENT_STAGE="syslog initialization"
 if ! pidof syslogd >/dev/null 2>&1; then
   log "Starting syslogd"
   syslogd -n -O /dev/stdout &
@@ -302,9 +326,11 @@ else
 fi
 
 # Positionally add any user-provided overrides.
+CURRENT_STAGE="argument finalization"
 if [ -n "$TFTPD_ARGS" ]; then
   eval "set -- $TFTPD_ARGS \"\$@\""
 fi
 
+CURRENT_STAGE="launch"
 log "Launching: in.tftpd $*"
 exec in.tftpd "$@"
