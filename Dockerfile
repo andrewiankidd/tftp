@@ -1,7 +1,7 @@
 FROM alpine:3.20
 
-# Install server packages, BusyBox extras (for tftp/healthcheck), syslogd, and CA certs.
-RUN apk add --no-cache tftp-hpa busybox-extras busybox-syslogd ca-certificates
+# Install server packages, BusyBox extras (for tftp/healthcheck), and CA certs.
+RUN apk add --no-cache tftp-hpa busybox-extras ca-certificates
 
 # Copy entrypoint and healthcheck scripts into the image.
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
