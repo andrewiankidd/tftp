@@ -37,7 +37,9 @@ trim_spaces() {
 
 # Append a single argument to TFTPD_ARGS, keeping shell-safe quoting.
 append_arg() {
-  [ -z "$1" ] && return
+  if [ -z "$1" ]; then
+    return
+  fi
   escaped="$(escape_arg "$1")"
   if [ -z "$TFTPD_ARGS" ]; then
     TFTPD_ARGS="'$escaped'"
@@ -74,10 +76,14 @@ append_arg_with_value() {
 append_list_items() {
   flag="$1"
   items="$2"
-  [ -n "$items" ] || return
+  if [ -z "$items" ]; then
+    return
+  fi
   while IFS= read -r entry; do
     entry="$(trim_spaces "$entry")"
-    [ -n "$entry" ] || continue
+    if [ -z "$entry" ]; then
+      continue
+    fi
     if [ -n "$flag" ]; then
       append_arg "$flag"
     fi
@@ -132,14 +138,18 @@ extract_port_from_address() {
       port="$default_port"
       ;;
   esac
-  [ -n "$port" ] || port="$default_port"
+  if [ -z "$port" ]; then
+    port="$default_port"
+  fi
   printf '%s\n' "$port"
 }
 
 # Inspect effective capabilities for NET_BIND_SERVICE.
 has_cap_net_bind_service() {
   cap_eff=$(awk '/CapEff/ {print $2}' /proc/self/status 2>/dev/null || true)
-  [ -n "$cap_eff" ] || return 1
+  if [ -z "$cap_eff" ]; then
+    return 1
+  fi
   cap_value=$((16#$cap_eff))
   if [ $((cap_value & (1 << 10))) -ne 0 ]; then
     return 0
@@ -265,7 +275,7 @@ if [ -n "${TFTPD_VERBOSE_COUNT:-}" ]; then
   while [ "$count" -gt 0 ]; do
     append_arg "--verbose"
     count=$((count - 1))
-  done
+  done || true
 else
   append_flag_if_enabled "${TFTPD_VERBOSE:-}" "--verbose"
 fi
@@ -291,7 +301,9 @@ if [ "$TFTPD_SECURE_ENABLED" = "true" ]; then
   dir_count=0
   while IFS= read -r entry; do
     entry="$(trim_spaces "$entry")"
-    [ -n "$entry" ] || continue
+    if [ -z "$entry" ]; then
+      continue
+    fi
     dir_count=$((dir_count + 1))
   done <<EOF
 $(printf '%s\n' "$TFTPD_DIRECTORIES" | tr ',' '\n')
