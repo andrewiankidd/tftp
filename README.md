@@ -12,7 +12,7 @@ This is a fork of [pghalliday-docker/tftp](https://github.com/pghalliday-docker/
 Build directly from the `src` context:
 
 ```sh
-docker build -f src/Dockerfile ./src -t andrewkidd/tftp:local
+docker build -f src/Dockerfile ./src -t andrewkidd/tftp-server:local
 ```
 
 
@@ -37,20 +37,20 @@ This process is defined in
 Example host-network run with a bind-mounted TFTP root:
 
 ```sh
-docker run -d --name tftp --network host \
+docker run -d --name tftp-server --network host \
   -e HOSTNETWORK=true \
   -e TFTPD_LISTEN=true \
   -e TFTPD_ADDRESS=0.0.0.0:69 \
   -e TFTPD_PORT_RANGE=5000:5010 \
   -v /path/to/tftpboot:/var/tftpboot \
-  andrewkidd/tftp:latest
+  andrewkidd/tftp-server:latest
 ```
 
 ### Docker Compose
 ```
 services:
   netboot-tftp:
-    image: andrewkidd/tftp
+    image: andrewkidd/tftp-server
     container_name: netboot-tftp
     network_mode: host
     environment:
@@ -114,7 +114,7 @@ spec:
       dnsPolicy: ClusterFirstWithHostNet
       containers:
         - name: tftp
-          image: andrewkidd/tftp
+          image: andrewkidd/tftp-server
           imagePullPolicy: IfNotPresent
           env:
             - name: HOSTNETWORK
