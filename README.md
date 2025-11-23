@@ -4,6 +4,8 @@
 
 TFTP running in an alpine container, built for ARM and X86
 
+This is a fork of [pghalliday-docker/tftp](https://github.com/pghalliday-docker/tftp) with some minor updates. Original credit goes there.
+
 ## Building
 
 ### Locally
