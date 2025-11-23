@@ -1,6 +1,6 @@
 # tftp-server
 
-![alt text](.github/workflows/logo.png)
+![image representing tftp](.github/workflows/logo.png)
 
 TFTP running in an alpine container, built for ARM and X86
 
